@@ -2,6 +2,7 @@
 scratch/
 alignment-widget/
 *.glb
+!docs/*.glb
 *.step
 *.stp
 *.STEP

@@ -33,6 +33,11 @@ const state = {
 };
 
 const meshState = {
+  certusEvo: {
+    status: "loading",
+    triangles: [],
+    error: null,
+  },
   echoShield: {
     status: "loading",
     triangles: [],
@@ -42,12 +47,14 @@ const meshState = {
 
 const deviceDefinitions = [
   {
-    kind: "box",
+    kind: "mesh",
+    meshKey: "certusEvo",
     label: "INS",
     color: INS_COLOR,
     position: [0, 0, 0],
-    size: [0.4, 0.4, 0.4],
+    fallbackSize: [0.4, 0.4, 0.4],
     rotation: identityMatrix(),
+    meshRotation: identityMatrix(),
   },
   {
     kind: "mesh",
@@ -247,6 +254,15 @@ function rgba(color, alpha) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
+function colorFromFactor(factor) {
+  const [red, green, blue] = factor.map((value) =>
+    Math.round(clamp(value, 0, 1) * 255)
+      .toString(16)
+      .padStart(2, "0")
+  );
+  return `#${red}${green}${blue}`;
+}
+
 function resizeCanvas() {
   const pixelRatio = window.devicePixelRatio || 1;
   const bounds = canvas.getBoundingClientRect();
@@ -328,6 +344,174 @@ const boxFaces = [
   { indices: [3, 2, 6, 7], normal: [0, 1, 0] },
 ];
 
+const ACCESSOR_COMPONENTS = {
+  SCALAR: 1,
+  VEC2: 2,
+  VEC3: 3,
+  VEC4: 4,
+  MAT2: 4,
+  MAT3: 9,
+  MAT4: 16,
+};
+
+const COMPONENT_SIZES = {
+  5120: 1,
+  5121: 1,
+  5122: 2,
+  5123: 2,
+  5125: 4,
+  5126: 4,
+};
+
+function readComponent(view, offset, componentType) {
+  switch (componentType) {
+    case 5120:
+      return view.getInt8(offset);
+    case 5121:
+      return view.getUint8(offset);
+    case 5122:
+      return view.getInt16(offset, true);
+    case 5123:
+      return view.getUint16(offset, true);
+    case 5125:
+      return view.getUint32(offset, true);
+    case 5126:
+      return view.getFloat32(offset, true);
+    default:
+      throw new Error(`Unsupported GLB component type: ${componentType}`);
+  }
+}
+
+function readAccessor(json, view, binOffset, accessorIndex) {
+  const accessor = json.accessors[accessorIndex];
+  const bufferView = json.bufferViews[accessor.bufferView];
+  const componentCount = ACCESSOR_COMPONENTS[accessor.type];
+  const componentSize = COMPONENT_SIZES[accessor.componentType];
+  const stride = bufferView.byteStride || componentCount * componentSize;
+  const baseOffset =
+    binOffset +
+    (bufferView.byteOffset || 0) +
+    (accessor.byteOffset || 0);
+  const values = new Array(accessor.count);
+
+  for (let itemIndex = 0; itemIndex < accessor.count; itemIndex += 1) {
+    const itemOffset = baseOffset + itemIndex * stride;
+    if (componentCount === 1) {
+      values[itemIndex] = readComponent(view, itemOffset, accessor.componentType);
+      continue;
+    }
+
+    const item = new Array(componentCount);
+    for (let componentIndex = 0; componentIndex < componentCount; componentIndex += 1) {
+      item[componentIndex] = readComponent(
+        view,
+        itemOffset + componentIndex * componentSize,
+        accessor.componentType
+      );
+    }
+    values[itemIndex] = item;
+  }
+
+  return values;
+}
+
+function parseGlbModel(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  const magic = String.fromCharCode(
+    view.getUint8(0),
+    view.getUint8(1),
+    view.getUint8(2),
+    view.getUint8(3)
+  );
+  if (magic !== "glTF" || view.getUint32(4, true) !== 2) {
+    throw new Error("Unsupported GLB file");
+  }
+
+  let offset = 12;
+  let json = null;
+  let binOffset = 0;
+
+  while (offset < view.byteLength) {
+    const chunkLength = view.getUint32(offset, true);
+    const chunkType = view.getUint32(offset + 4, true);
+    const chunkDataOffset = offset + 8;
+
+    if (chunkType === 0x4e4f534a) {
+      json = JSON.parse(
+        new TextDecoder().decode(
+          new Uint8Array(arrayBuffer, chunkDataOffset, chunkLength)
+        )
+      );
+    } else if (chunkType === 0x004e4942) {
+      binOffset = chunkDataOffset;
+    }
+
+    offset = chunkDataOffset + chunkLength;
+  }
+
+  if (!json || !binOffset) {
+    throw new Error("Incomplete GLB file");
+  }
+
+  const materialColors = (json.materials || []).map((material) =>
+    colorFromFactor(
+      material.pbrMetallicRoughness?.baseColorFactor?.slice(0, 3) || [0.75, 0.82, 0.95]
+    )
+  );
+
+  const rawTriangles = [];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+
+  for (const mesh of json.meshes || []) {
+    for (const primitive of mesh.primitives || []) {
+      if ((primitive.mode ?? 4) !== 4) {
+        continue;
+      }
+
+      const positions = readAccessor(json, view, binOffset, primitive.attributes.POSITION);
+      const indices = readAccessor(json, view, binOffset, primitive.indices);
+      const color = materialColors[primitive.material] || INS_COLOR;
+
+      for (let index = 0; index < indices.length; index += 3) {
+        const vertices = [
+          positions[indices[index]],
+          positions[indices[index + 1]],
+          positions[indices[index + 2]],
+        ].map((vertex) => [...vertex]);
+
+        rawTriangles.push({ vertices, color });
+
+        for (const vertex of vertices) {
+          for (let axis = 0; axis < 3; axis += 1) {
+            min[axis] = Math.min(min[axis], vertex[axis]);
+            max[axis] = Math.max(max[axis], vertex[axis]);
+          }
+        }
+      }
+    }
+  }
+
+  const center = min.map((value, axis) => (value + max[axis]) / 2);
+  const size = max.map((value, axis) => value - min[axis]);
+  const scale = 1.55 / Math.max(...size);
+
+  return rawTriangles.map((triangle) => {
+    const vertices = triangle.vertices.map((vertex) =>
+      scaleVector(subtractVectors(vertex, center), scale)
+    );
+    const edgeA = subtractVectors(vertices[1], vertices[0]);
+    const edgeB = subtractVectors(vertices[2], vertices[0]);
+    const normal = normalize(cross(edgeA, edgeB));
+
+    return {
+      vertices,
+      normal,
+      color: triangle.color,
+    };
+  });
+}
+
 function parseBinaryStl(arrayBuffer) {
   const view = new DataView(arrayBuffer);
   const triangleCount = view.getUint32(80, true);
@@ -385,6 +569,24 @@ async function loadEchoShieldMesh() {
   } catch (error) {
     meshState.echoShield.status = "error";
     meshState.echoShield.error = error instanceof Error ? error.message : String(error);
+    drawScene();
+  }
+}
+
+async function loadCertusEvoMesh() {
+  try {
+    const response = await fetch("./certusevo.glb");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const triangles = parseGlbModel(await response.arrayBuffer());
+    meshState.certusEvo.status = "ready";
+    meshState.certusEvo.triangles = triangles;
+    drawScene();
+  } catch (error) {
+    meshState.certusEvo.status = "error";
+    meshState.certusEvo.error = error instanceof Error ? error.message : String(error);
     drawScene();
   }
 }
@@ -567,7 +769,8 @@ function collectMeshFaces(device, camera, width, height, facesToDraw, light) {
     );
     const specular = Math.pow(clamp(dot(reflection, toCamera), 0, 1), 20) * 0.28;
     const rim = Math.pow(1 - clamp(dot(worldNormal, toCamera), 0, 1), 2) * 0.16;
-    const solidFill = blendColor(device.color, diffuse);
+    const baseColor = triangle.color || device.color;
+    const solidFill = blendColor(baseColor, diffuse);
 
     facesToDraw.push({
       projected,
@@ -656,15 +859,25 @@ function drawScene() {
   context.fillText("INS frame", 18, 28);
   context.fillText("EchoShield follows roll/pitch/yaw inputs", 18, 48);
 
+  if (meshState.certusEvo.status === "loading") {
+    context.fillStyle = "rgba(227, 240, 252, 0.58)";
+    context.font = "500 12px IBM Plex Sans, sans-serif";
+    context.fillText("Loading CertusEvo GLB...", 18, 68);
+  } else if (meshState.certusEvo.status === "error") {
+    context.fillStyle = "rgba(255, 180, 180, 0.92)";
+    context.font = "500 12px IBM Plex Sans, sans-serif";
+    context.fillText(`CertusEvo GLB failed to load: ${meshState.certusEvo.error}`, 18, 68);
+  }
+
   const mesh = meshState.echoShield;
   if (mesh.status === "loading") {
     context.fillStyle = "rgba(227, 240, 252, 0.58)";
     context.font = "500 12px IBM Plex Sans, sans-serif";
-    context.fillText("Loading EchoShield STL...", 18, 68);
+    context.fillText("Loading EchoShield STL...", 18, 88);
   } else if (mesh.status === "error") {
     context.fillStyle = "rgba(255, 180, 180, 0.92)";
     context.font = "500 12px IBM Plex Sans, sans-serif";
-    context.fillText(`EchoShield STL failed to load: ${mesh.error}`, 18, 68);
+    context.fillText(`EchoShield STL failed to load: ${mesh.error}`, 18, 88);
   }
 }
 
@@ -764,4 +977,5 @@ window.addEventListener("resize", drawScene);
 
 updateReadouts();
 drawScene();
+loadCertusEvoMesh();
 loadEchoShieldMesh();
