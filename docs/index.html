@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Alignment Settings Replica</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel controls-panel">
+        <h1>EchoShield INS Offsets Visuallizer</h1>
+
+        <div class="section-header">
+          <h2>Head Alignment</h2>
+          <button id="reset-button" class="ghost-button" type="button">
+            Reset
+          </button>
+        </div>
+
+        <form class="field-list" id="controls-form">
+          <label class="field">
+            <span class="field-label">psi<sub>roll</sub></span>
+            <div class="field-input-wrap">
+              <input id="roll-input" name="roll" type="number" value="0" step="0.1">
+              <span class="field-unit">deg</span>
+            </div>
+            <span class="field-help">
+              Roll of EchoShield relative to the INS.
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">psi<sub>pitch</sub></span>
+            <div class="field-input-wrap">
+              <input id="pitch-input" name="pitch" type="number" value="0" step="0.1">
+              <span class="field-unit">deg</span>
+            </div>
+            <span class="field-help">
+              Pitch of EchoShield relative to the INS.
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">psi<sub>yaw</sub></span>
+            <div class="field-input-wrap">
+              <input id="yaw-input" name="yaw" type="number" value="0" step="0.1">
+              <span class="field-unit">deg</span>
+            </div>
+          </label>
+        </form>
+
+        <dl class="readout">
+          <div>
+            <dt>Quaternion</dt>
+            <dd id="quaternion-readout">[1.000, 0.000, 0.000, 0.000]</dd>
+          </div>
+          <div>
+            <dt>Rotation Matrix</dt>
+            <dd id="matrix-readout">[1 0 0; 0 1 0; 0 0 1]</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="panel viewer-panel">
+        <div class="viewer-header">
+          <div>
+            <p class="eyebrow">3D View</p>
+            <h2>Relative Orientation</h2>
+          </div>
+          <p class="viewer-note">Drag to orbit. Scroll to zoom.</p>
+        </div>
+
+        <div class="viewer-frame">
+          <canvas id="alignment-canvas" aria-label="Alignment visualizer"></canvas>
+
+          <div class="legend">
+            <div class="legend-item">
+              <span class="legend-key ins-key"></span>
+              <span>INS</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-key head-key"></span>
+              <span>EchoShield</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

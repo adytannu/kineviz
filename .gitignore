@@ -1,0 +1,10 @@
+.codex
+scratch/
+alignment-widget/
+*.glb
+*.step
+*.stp
+*.STEP
+*.STP
+ES_simple.stl
+*:Zone.Identifier
